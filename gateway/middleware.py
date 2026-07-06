@@ -1,31 +1,38 @@
-from urllib.parse import unquote
+# from starlette.middleware.base import BaseHTTPMiddleware
 
+# class SecurityMiddleware(BaseHTTPMiddleware):
+#     async def dispatch(self, request, call_next):
+#         response = await call_next(request)
+#         response.headers["X-Content-Type-Options"] = "nosniff"
+#         response.headers["X-Frame-Options"] = "DENY"
+#         return response
+
+
+from urllib.parse import unquote
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.responses import JSONResponse
 
 from scanner.sqli import detect_sqli
 from scanner.xss import detect_xss
 from scanner.traversal import detect_traversal
-from scanner.jwt import validate_token
-from scanner.rate_limit import allow_request
-from scanner.headers import check_headers
 
 
 class SecurityMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request, call_next):
 
-        ip = request.client.host
+        # Skip Swagger Docs
+        path = request.url.path
 
-        # Rate Limiting
-        if not allow_request(ip):
-            return JSONResponse(
-                {"error": "Rate Limit Exceeded"},
-                status_code=429
-            )
+        if path.startswith("/docs") or \
+           path.startswith("/openapi.json") or \
+           path.startswith("/redoc"):
+            return await call_next(request)
 
         # Decode URL
         url = unquote(str(request.url))
+
+        print("Scanning:", url)
 
         # SQL Injection
         if detect_sqli(url):
@@ -48,18 +55,9 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                 status_code=403
             )
 
-        # JWT Validation
-        token = request.headers.get("Authorization")
-
-        if token:
-            if not validate_token(token):
-                return JSONResponse(
-                    {"error": "Invalid JWT"},
-                    status_code=401
-                )
-
         response = await call_next(request)
 
-        check_headers(response)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
 
         return response
